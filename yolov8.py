@@ -787,12 +787,10 @@ def train_yolov8_model():
         log_data = {}
 
         # pull mAP50 and mAP50-95 from the metrics dict
-        m50 = trainer.metrics.get("metrics/mAP50(B)", None)
-        m5095 = trainer.metrics.get("metrics/mAP50-95(B)", None)
-        if m50 is not None:
-            log_data["train_mAP50"] = float(m50)
-        if m5095 is not None:
-            log_data["train_mAP50-95"] = float(m5095)
+        m50    = trainer.metrics.get("metrics/mAP50(B)",    None)
+        m5095  = trainer.metrics.get("metrics/mAP50-95(B)", None)
+        if m50   is not None: log_data["train_mAP50"]     = float(m50)
+        if m5095 is not None: log_data["train_mAP50-95"]  = float(m5095)
 
         # learning rate
         try:
@@ -801,14 +799,21 @@ def train_yolov8_model():
         except Exception:
             pass
 
+        # **new**: log your training losses
+        box_loss = trainer.metrics.get("train/box_loss", None)
+        cls_loss = trainer.metrics.get("train/cls_loss", None)
+        dfl_loss = trainer.metrics.get("train/dfl_loss", None)
+        if box_loss is not None: log_data["train_box_loss"] = float(box_loss)
+        if cls_loss is not None: log_data["train_cls_loss"] = float(cls_loss)
+        if dfl_loss is not None: log_data["train_dfl_loss"] = float(dfl_loss)
+
+        # send everything to W&B
         if log_data:
             wandb.log(log_data)
 
         # checkpoint save
-        if (
-            epoch % experiment_config["save_period"] == 0
-            or epoch == experiment_config["epochs"]
-        ):
+        if (epoch % experiment_config["save_period"] == 0
+            or epoch == experiment_config["epochs"]):
             os.makedirs(experiment_config["checkpoint_dir"], exist_ok=True)
             ckpt_file = (
                 f"{experiment_config['checkpoint_dir']}/"
@@ -820,11 +825,11 @@ def train_yolov8_model():
                     save_fn(ckpt_file)
                 else:
                     import torch
-
                     torch.save(trainer.model.model.state_dict(), ckpt_file)
                 print(f"Saved checkpoint to {ckpt_file}")
                 upload_to_hf(
-                    experiment_config["checkpoint_dir"], f"checkpoint epoch {epoch}"
+                    experiment_config["checkpoint_dir"],
+                    f"checkpoint epoch {epoch}"
                 )
             else:
                 print("Warning: trainer.model not found; skipping save")
