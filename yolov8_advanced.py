@@ -81,7 +81,7 @@ experiment_config = {
     # Model and technique selection
     "model_type": "yolov8",
     "model_size": "m",  # n, s, m, l, or x
-    "techniques": ["focal_loss", "iou_aware", "balanced_sampling"],
+    "techniques": ["focal_loss", "balanced_sampling"],
     # Training parameters
     "task": "detect",
     "epochs": 100,
