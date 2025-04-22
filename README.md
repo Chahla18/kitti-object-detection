@@ -79,7 +79,8 @@ python yolov8_advanced.py
 ## Project Structure
 ```
 ├── data/                   # Data handling utilities
-├── data_exploration.py     # Creating visuals to explore the data
+├── data_exploration.ipynb     # Creating visuals to explore the data
+├── yolov8.py      # Initial test model
 ├── yolov8_advanced.py      # Training and Evaluation script
 └── requirements.txt        # Dependencies
 ```
