@@ -73,9 +73,9 @@ except Exception as e:
 
 
 # Authentication tokens
-HF_TOKEN = "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"  # Hugging Face token
-WANDB_API_KEY = "dda7d259bece87388377901ab094ac808377eda3"  # W&B API key
-HF_USERNAME = "chahla"  # Username on Hugging Face
+HF_TOKEN = "..."  # Hugging Face token
+WANDB_API_KEY = "..."  # W&B API key
+HF_USERNAME = "..."  # Username on Hugging Face
 
 experiment_config = {
     # Model and technique selection
