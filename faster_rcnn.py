@@ -1,7 +1,5 @@
 import os
 import torch
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
 from torchvision.datasets import Kitti
 from PIL import Image
 import numpy as np
@@ -16,84 +14,56 @@ import random
 from datetime import datetime
 from pathlib import Path
 import wandb
-from huggingface_hub import HfApi, create_repo, login, upload_folder
+from huggingface_hub import HfApi, create_repo, login
 from tqdm import tqdm
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import Counter
 import torchvision
-from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from torchvision.transforms import functional as F
-from torchvision import transforms as T
-from torchvision.datasets import CocoDetection
 from torchvision.utils import make_grid
-
+from torchvision.transforms import Resize, RandomAffine
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+import math
 
 # Authentication tokens
-HF_TOKEN = "..."  # Hugging Face token
-WANDB_API_KEY = "..."  # W&B API key
-HF_USERNAME = "..."  # Username on Hugging Face
+HF_TOKEN = "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"  # Hugging Face token
+WANDB_API_KEY = "dda7d259bece87388377901ab094ac808377eda3"  # W&B API key
+HF_USERNAME = "chahla"  # Username on Hugging Face
 
 experiment_config = {
     # Model and technique selection
     "model_type": "faster_rcnn",
     "backbone": "resnet50_fpn",
-    "techniques": ["balanced_sampling", "cosine_lr"],
+    "techniques": ["augmentation"],
     # Training parameters
     "epochs": 40,
     "batch_size": 16,
     "img_size": 800,  # R-CNN can handle larger images
-    "optimizer": "Adam",
     "lr0": 0.005,
     "lrf": 0.01,
     "momentum": 0.9,
     "weight_decay": 0.0005,
     "warmup_epochs": 5.0,
+    "optimizer": "Adam",
     # Keep only relevant augmentations
-    "scale": 0.5,  # Scale augmentation can be useful
-    "translate": 0.2,  # Translation is useful
+    "scale": 0.2,  # Scale augmentation can be useful
+    "translate": 0.1,  # Translation is useful
     # Dataset and output settings
     "kitti_dir": "/home/onyxia/work/datasets",
     "rcnn_dir": "/home/onyxia/work/datasets/Kitti_RCNN",  # Add this to point to processed data
     "output_dir": "runs/detect",
     "checkpoint_dir": "checkpoints",
     "save_period": 1,
-    "cls_wts": [2.0, 3.0, 3.0, 3.0, 4.0, 3.0, 2.0, 2.0],
 }
 
 # Generate unique identifiers
 experiment_id = str(uuid.uuid4())[:8]
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-def calculate_class_weights(class_counts):
-    """Calculate class weights based on inverse frequency"""
-    total = sum(class_counts.values())
-    inverse_freqs = {cls: total / count for cls, count in class_counts.items()}
-    # Normalize weights so they're not too extreme
-    max_weight = max(inverse_freqs.values())
-    normalized = {
-        cls: min(weight / max_weight * 3, 4.0) for cls, weight in inverse_freqs.items()
-    }
-    return normalized
-
-
-# After dataset organization but before training
-class_counts = {
-    "car": 28742,
-    "cyclist": 1627,
-    "misc": 973,
-    "pedestrian": 4487,
-    "person_sitting": 222,
-    "tram": 511,
-    "truck": 1094,
-    "van": 2914,
-}
-class_weights = calculate_class_weights(class_counts)
-
 
 def setup_huggingface():
     """Set up Hugging Face authentication and create repository"""
@@ -213,14 +183,14 @@ def setup_experiment():
 
 # Class mapping - defined at module level for accessibility
 CLASS_MAPPING = {
-    "car": 0,
-    "cyclist": 1,
-    "misc": 2,
-    "pedestrian": 3,
-    "person_sitting": 4,
-    "tram": 5,
-    "truck": 6,
-    "van": 7,
+    "car": 1,
+    "cyclist": 2,
+    "misc": 3,
+    "pedestrian": 4,
+    "person_sitting": 5,
+    "tram": 6,
+    "truck": 7,
+    "van": 8,
 }
 
 
@@ -475,8 +445,6 @@ def reorganize_kitti_dataset_for_rcnn():
             "truck",
             "van",
         ],
-        # Add class weights as a list in the same order as names
-        "class_weights": [2.0, 3.0, 3.0, 3.0, 4.0, 3.0, 2.0, 2.0],
     }
 
     yaml_path = os.path.join(rcnn_dir, "data.yaml")
@@ -735,6 +703,92 @@ class KittiRCNNDataset(torch.utils.data.Dataset):
         return len(self.imgs)
 
 
+class ResizeWithBBox:
+    """
+    Resize the PIL image to `size` and scale all boxes in target accordingly.
+    `size` can be a (h, w) tuple.
+    """
+    def __init__(self, size):
+        # torchvision’s Resize takes (h, w)
+        self.size = size
+        self.resize = Resize(size)
+
+    def __call__(self, image, target):
+        # original size
+        w0, h0 = image.size  # PIL gives (width, height)
+        # resize image
+        image = self.resize(image)
+        # new size
+        h1, w1 = self.size   # note: torchvision Resize(size) uses (h, w)
+
+        # scale boxes if present
+        if "boxes" in target and len(target["boxes"]) > 0:
+            # convert to tensor if needed
+            boxes = target["boxes"]
+            # compute scale factors
+            x_scale = w1 / w0
+            y_scale = h1 / h0
+            # scale [x1,y1,x2,y2]
+            boxes = boxes * torch.tensor([x_scale, y_scale, x_scale, y_scale])
+            target["boxes"] = boxes
+
+        return image, target
+
+
+class RandomAffineWithBBox:
+    """
+    Apply the same RandomAffine to the PIL image and the target boxes.
+    Only supports degrees=0 (no rotation), but scale+translate.
+    """
+    def __init__(self, degrees, translate, scale):
+        self.degrees   = degrees
+        self.translate = translate
+        self.scale     = scale
+
+    def __call__(self, image, target):
+        # Sample affine params the same way torchvision does internally:
+        # angle, translations (tx, ty), scale, shear
+        angle, (tx, ty), scale, shear = RandomAffine.get_params(
+            degrees=( -self.degrees, self.degrees ),
+            translate=self.translate,
+            scale_ranges=(1.0 - self.scale, 1.0 + self.scale),
+            shears=None,
+            img_size=image.size  # (W, H)
+        )
+
+        # 1) warp the image
+        image = F.affine(image, angle=angle, translate=(tx, ty),
+                         scale=scale, shear=shear)
+
+        # 2) transform each box
+        if "boxes" in target:
+            boxes = target["boxes"]  # tensor of shape [N,4] in [x1,y1,x2,y2]
+            # build the 2×3 affine matrix
+            theta = math.radians(angle)
+            a = scale * math.cos(theta)
+            b = scale * math.sin(theta)
+            # F.affine uses the matrix [[ a, -b, tx ], [ b,  a, ty ]]
+            matrix = torch.tensor([[ a, -b, tx ],
+                                   [ b,  a, ty ]], dtype=torch.float32)
+
+            new_boxes = []
+            for box in boxes:
+                # corner points in homogeneous coords
+                x1, y1, x2, y2 = box
+                corners = torch.tensor([[x1,y1,1],
+                                        [x1,y2,1],
+                                        [x2,y1,1],
+                                        [x2,y2,1]], dtype=torch.float32)  # (4,3)
+                warped = (matrix @ corners.T).T  # (4,2)
+                xs = warped[:,0]; ys = warped[:,1]
+                x1n, x2n = xs.min(), xs.max()
+                y1n, y2n = ys.min(), ys.max()
+                new_boxes.append([x1n, y1n, x2n, y2n])
+
+            target["boxes"] = torch.stack([torch.tensor(b) for b in new_boxes])
+
+        return image, target
+
 # Training function
 def train_rcnn_model():
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -771,12 +825,21 @@ def train_rcnn_model():
             return image, target
 
     # Create transforms
-    transforms = Compose(
-        [
-            ToTensor(),
-            RandomHorizontalFlip(0.5),
-        ]
-    )
+    transforms = Compose([
+        # 1) resize to square using your img_size
+        ResizeWithBBox((experiment_config["img_size"], experiment_config["img_size"])),
+        # 2) random scale & translate
+        RandomAffineWithBBox(
+            degrees=0,
+            scale=experiment_config["scale"],
+            translate=(experiment_config["translate"], experiment_config["translate"])
+        ),
+        # 3) convert to tensor
+        ToTensor(),
+        # 4) horizontal flip
+        RandomHorizontalFlip(0.5),
+    ])
+
 
     # Create datasets
     train_dataset = KittiRCNNDataset(
@@ -808,114 +871,52 @@ def train_rcnn_model():
         num_workers=4,
     )
 
-    # ===== INSERT DATASET VERIFICATION CODE HERE =====
-    print("\n=== VERIFYING DATASET PREPROCESSING ===")
-    
-    # Verify class distribution in training set
-    train_class_counts = {cls_name: 0 for cls_name in CLASS_MAPPING.keys()}
-    train_samples = 0
-    
-    for _, targets in tqdm(train_loader, desc="Checking training set"):
-        train_samples += len(targets)
-        for target in targets:
-            labels = target["labels"].cpu().numpy()
-            for label in labels:
-                class_name = list(CLASS_MAPPING.keys())[label]
-                train_class_counts[class_name] += 1
-    
-    # Verify class distribution in validation set
-    val_class_counts = {cls_name: 0 for cls_name in CLASS_MAPPING.keys()}
-    val_samples = 0
-    
-    for _, targets in tqdm(val_loader, desc="Checking validation set"):
-        val_samples += len(targets)
-        for target in targets:
-            labels = target["labels"].cpu().numpy()
-            for label in labels:
-                class_name = list(CLASS_MAPPING.keys())[label]
-                val_class_counts[class_name] += 1
-    
-    # Print summary
-    print(f"\nTraining set: {train_samples} images")
-    print("Class distribution in training set:")
-    for cls_name, count in train_class_counts.items():
-        print(f"  {cls_name}: {count} instances")
-    
-    print(f"\nValidation set: {val_samples} images")
-    print("Class distribution in validation set:")
-    for cls_name, count in val_class_counts.items():
-        print(f"  {cls_name}: {count} instances")
-    
-    # Check if car annotations exist
-    if train_class_counts["car"] == 0:
-        raise ValueError("No Car annotations found in training set! Check dataset preprocessing.")
-    
-    if val_class_counts["car"] == 0:
-        raise ValueError("No Car annotations found in validation set! Check dataset preprocessing.")
-    
-    # Verify a few sample annotations
-    print("\nChecking sample annotations...")
-    samples_to_check = 3
-    checked = 0
-    
-    for images, targets in train_loader:
-        for i, (image, target) in enumerate(zip(images, targets)):
-            if checked >= samples_to_check:
-                break
-                
-            # Get image dimensions
-            h, w = image.shape[1:]
-            print(f"\nSample {checked+1}:")
-            print(f"Image size: {w}x{h}")
-            
-            # Print bounding boxes
-            boxes = target["boxes"].cpu().numpy()
-            labels = target["labels"].cpu().numpy()
-            
-            for box, label in zip(boxes, labels):
-                class_name = list(CLASS_MAPPING.keys())[label]
-                x1, y1, x2, y2 = box
-                width = x2 - x1
-                height = y2 - y1
-                
-                print(f"  {class_name}: [{x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f}], size: {width:.1f}x{height:.1f}")
-                
-                # Check for invalid boxes
-                if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
-                    print(f"    WARNING: Box coordinates outside image boundaries!")
-                
-                if width <= 0 or height <= 0:
-                    print(f"    WARNING: Invalid box dimensions!")
-            
-            checked += 1
-        
-        if checked >= samples_to_check:
-            break
-
-
     # Create model
-    model = create_faster_rcnn_model(num_classes=len(CLASS_MAPPING))
+    model = create_faster_rcnn_model(num_classes=len(CLASS_MAPPING)+1)
     model.to(device)
 
-    # Optimizer with class weights
-    class_weights = []
-    if experiment_config.get("cls_wts") is not None:
-        class_weights = experiment_config["cls_wts"]
 
+    # Optimizer selection from config
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(
-        params,
-        lr=experiment_config["lr0"],
-        momentum=experiment_config["momentum"],
-        weight_decay=experiment_config["weight_decay"],
-    )
+    opt_name = experiment_config["optimizer"].lower()
+    if opt_name == "sgd":
+        optimizer = torch.optim.SGD(
+            params,
+            lr=experiment_config["lr0"],
+            momentum=experiment_config["momentum"],
+            weight_decay=experiment_config["weight_decay"],
+        )
+    elif opt_name == "adam":
+        optimizer = torch.optim.Adam(
+            params,
+            lr=experiment_config["lr0"],
+            weight_decay=experiment_config["weight_decay"],
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer: {experiment_config['optimizer']}")
 
-    # Learning rate scheduler
-    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+
+    # Warm-up scheduler for the first N epochs, then cosine thereafter
+    warmup_epochs = experiment_config["warmup_epochs"]
+    total_warmup_iters = int(warmup_epochs * len(train_loader))
+
+    warmup_scheduler = LinearLR(
         optimizer,
-        T_max=experiment_config["epochs"],
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=total_warmup_iters,
+    )
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=experiment_config["epochs"] - warmup_epochs,
         eta_min=experiment_config["lr0"] * experiment_config["lrf"],
     )
+    lr_scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs],
+    )
+
 
     # Initialize W&B
     wandb_run_id = init_wandb()
@@ -1055,25 +1056,22 @@ def train_rcnn_model():
 
 def evaluate_rcnn(model, data_loader, device):
     model.eval()
-
     predictions = []
     gt_annotations = []
-    ann_id = 0       # unique ID for each GT annotation
-    image_id = 0     # unique ID for each image
+    ann_id = 0
+    image_id = 0
 
     with torch.no_grad():
         for images, batch_targets in data_loader:
-            # move inputs to device
             images = [img.to(device) for img in images]
             outputs = model(images)
 
-            # outputs is a list of dicts, batch_targets is a list of dicts
             for output, target in zip(outputs, batch_targets):
                 # assign this image a global ID
                 img_id = image_id
                 image_id += 1
 
-                # --- detections ---
+                # collect detections
                 boxes  = output["boxes"].cpu().numpy()
                 scores = output["scores"].cpu().numpy()
                 labels = output["labels"].cpu().numpy()
@@ -1086,7 +1084,7 @@ def evaluate_rcnn(model, data_loader, device):
                         "score":       float(score),
                     })
 
-                # --- ground truth ---
+                # collect ground truth
                 gt_boxes  = target["boxes"].cpu().numpy()
                 gt_labels = target["labels"].cpu().numpy()
                 for box, label in zip(gt_boxes, gt_labels):
@@ -1101,47 +1099,70 @@ def evaluate_rcnn(model, data_loader, device):
                     })
                     ann_id += 1
 
-    # build a minimal COCO-style dataset
+    # build minimal COCO-style dataset
     coco_gt = COCO()
     coco_gt.dataset = {
         "images":      [{"id": i} for i in range(image_id)],
-        "categories": [{"id": i, "name": k} 
-                        for i, k in enumerate(CLASS_MAPPING.keys())],
+        "categories": [{"id": CLASS_MAPPING[name], "name": name}
+                       for name in CLASS_MAPPING.keys()],
         "annotations": gt_annotations
     }
     coco_gt.createIndex()
 
     # load detections
-    coco_dt = coco_gt.loadRes(predictions)
+    coco_dt = coco_gt.loadRes(predictions) if predictions else coco_gt
 
-    # run eval
+    # run COCO evaluation
     coco_eval = COCOeval(coco_gt, coco_dt, "bbox")
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
 
-    # build a per-class AP50 dict:
+    # per-class AP50
     per_class = {}
-    # coco_eval.eval['precision'] has shape [T, R, K, A, M]
-    # T=IoU thresholds, we want T=0 (.50), slice 0
     for idx, class_name in enumerate(CLASS_MAPPING.keys()):
-        # precision[:, recall, class, area=0, maxDet=-1]
         pr = coco_eval.eval['precision'][0, :, idx, 0, -1]
-        # precision uses -1 to mark missing, so filter
         valid = pr[pr >= 0]
         per_class[class_name] = float(valid.mean()) if len(valid) else 0.0
 
-    # return it alongside the overall metrics
-    metrics = {
+    return {
         "mAP50":     float(coco_eval.stats[1]),
         "mAP50-95":  float(coco_eval.stats[0]),
         "precision": float(np.mean(coco_eval.eval["precision"][0, :, :, 0, -1])),
         "recall":    float(np.mean(coco_eval.eval["recall"][0, :, 0, -1])),
         "per_class_AP50": per_class,
     }
-    return metrics
 
 
+
+# Helper function to calculate IoU between two bounding boxes
+def calculate_box_iou(box1, box2):
+    """
+    Calculate IoU between box1 and box2
+    Boxes are in format [x1, y1, x2, y2]
+    """
+    # Calculate intersection area
+    x_left = max(box1[0], box2[0])
+    y_top = max(box1[1], box2[1])
+    x_right = min(box1[2], box2[2])
+    y_bottom = min(box1[3], box2[3])
+    
+    if x_right < x_left or y_bottom < y_top:
+        return 0.0
+    
+    intersection_area = (x_right - x_left) * (y_bottom - y_top)
+    
+    # Calculate union area
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union_area = box1_area + box2_area - intersection_area
+    
+    if union_area <= 0:
+        return 0.0
+    
+    return intersection_area / union_area
+
+    
 def main():
     """Main execution function"""
     # Step 1: Set up the experiment
