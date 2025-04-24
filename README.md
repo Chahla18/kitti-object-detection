@@ -2,97 +2,104 @@
 
 This repository contains an implementation of YOLOv8 for object detection on the KITTI autonomous driving dataset. The project focuses on optimizing detection performance across different object classes with varying frequencies and occlusion levels.
 
-## Dataset
+## 📋 Project Overview
 
-The [KITTI Object Detection Dataset](http://www.cvlibs.net/datasets/kitti/eval_object.php) consists of 7,481 training images and 7,518 test images, comprising a total of 80,256 labeled objects. The dataset contains annotations for cars, pedestrians, cyclists, and other road objects captured from a moving vehicle.
+We evaluated two distinct approaches for object detection in driving scenes:
+- **YOLOv8** (single-stage detector)
+- **Faster R-CNN** (two-stage detector)
 
-Key dataset characteristics:
-- Significant class imbalance (Cars: 55.42%, Pedestrians: 8.65%, Cyclists: 3.14%)
-- Various occlusion levels and object sizes
-- Objects captured at different orientations and distances
+Our study demonstrated that YOLOv8 offers superior performance for object detection in autonomous driving contexts, both in terms of accuracy and inference speed.
 
-## Dataset Preprocessing
+## 🔍 Dataset Analysis
 
-The preprocessing pipeline includes:
-- Converting KITTI format to YOLO format
-- Creating a class-balanced train/validation split
-- Generating bounding box statistics and visualizations
-- Handling occlusion levels and truncation information
+The [KITTI Object Detection Dataset](http://www.cvlibs.net/datasets/kitti/eval_object.php) consists of 7,481 training images of road scenes captured from a moving vehicle. The dataset contains annotations for cars, pedestrians, cyclists, and other road objects captured from a moving vehicle. Our analysis revealed:
 
-## Model Architecture
+- Significant class imbalance (Cars: 55.4%, Pedestrians: 8.7%, Cyclists: 3.1%)
+- Bimodal distribution of vehicle orientations corresponding to main road directions
+- Various occlusion levels and truncations at image borders
 
-The project implements YOLOv8, a state-of-the-art object detection architecture from Ultralytics. Two model variants were tested:
-- YOLOv8-M: Medium-sized model with a good speed/accuracy trade-off
-- Faster R-CNN
+## 🛠️ Methodology
 
-## Features
+### Data Preprocessing
+- Stratified sampling (80/20 split) to ensure balanced representation of minority classes
+- Exclusion of the "DontCare" class to improve learning quality
+- Format conversion specific to each architecture (normalized coordinates for YOLOv8, absolute coordinates for Faster R-CNN)
 
-- **Class Weighting**: Implements custom class weights to address dataset imbalance
-- **Augmentation Strategy**: Uses domain-specific augmentations suitable for autonomous driving scenarios
-- **Occlusion Handling**: Optimized detection of partially visible objects
-- **Experiment Tracking**: Full integration with Weights & Biases for experiment tracking
-- **Model Versioning**: Automatic checkpoint saving to Hugging Face Hub
+### Model Architectures
+- **YOLOv8m**: 25.9M parameters, 640×640px input resolution
+- **Faster R-CNN**: ResNet-50 backbone with FPN, 800×800px input resolution
 
-## Results
+### Optimization Techniques
+- Data augmentation: Geometric transformations, color modifications, mixing techniques (Mosaic, MixUp)
+- Class weighting: Inversely proportional to class frequency
+- Learning rate scheduling: Warm-up phase followed by cosine decay
 
-Performance metrics for our best model until now:
+## 📊 Results
 
-| Class          | mAP50 | mAP50-95 | Precision | Recall |
-|----------------|-------|----------|-----------|--------|
-| Car            | 0.916 | 0.397    | 0.886     | 0.854  |
-| Pedestrian     | 0.666 | 0.222    | 0.830     | 0.594  |
-| Cyclist        | 0.643 | 0.230    | 0.688     | 0.639  |
-| Truck          | 0.950 | 0.417    | 0.876     | 0.911  |
-| Van            | 0.803 | 0.344    | 0.782     | 0.729  |
-| Tram           | 0.852 | 0.318    | 0.744     | 0.816  |
-| Person_sitting | 0.533 | 0.203    | 0.625     | 0.347  |
-| Misc           | 0.646 | 0.266    | 0.779     | 0.577  |
-| **Overall**    | **0.683** | **0.270** | **0.743** | **0.613** |
+YOLOv8 clearly demonstrated superior performance:
 
-## Key Insights
+| Metric | YOLOv8 | Faster R-CNN |
+|--------|--------|-------------|
+| mAP50 | 0.919 | 0.057* |
+| mAP50-95 | 0.659 | 0.017* |
+| Precision | 0.909 | - |
+| Recall | 0.864 | - |
 
-Our experimentation led to several important findings:
-1. Removing the "DontCare" class improved overall metrics
-2. Class weights significantly enhanced performance on minority classes
-3. Reducing rotation augmentation to realistic angles (5° vs 45°) improved results
-4. Extended training (100 epochs) was necessary for optimal convergence
+*Faster R-CNN results were limited by training constraints (only 12 epochs completed)
 
-## How to Run
+### Performance by Class (YOLOv8)
+
+| Class | AP50 | AP50-95 | Precision | Recall |
+|-------|------|---------|-----------|--------|
+| Car | 0.966 | 0.763 | 0.916 | 0.931 |
+| Truck | 0.975 | 0.781 | 0.941 | 0.966 |
+| Van | 0.968 | 0.756 | 0.939 | 0.928 |
+| Tram | 0.965 | 0.735 | 0.921 | 0.927 |
+| Misc | 0.920 | 0.647 | 0.856 | 0.902 |
+| Cyclist | 0.850 | 0.536 | 0.875 | 0.783 |
+| Pedestrian | 0.831 | 0.471 | 0.894 | 0.732 |
+| Person_sitting | 0.877 | 0.586 | 0.932 | 0.746 |
+
+## 📁 Project Structure
+```
+kitti-object-detection/
+├── models/
+│   ├── faster_rcnn.py        # Faster R-CNN implementation
+│   └── yolov8_advanced.py    # YOLOv8 implementation
+├── video_testing/
+│   ├── traffic_results_yolov8m.mp4  # YOLOv8 video demonstration
+│   ├── traffic.mp4                  # Source video
+│   └── video_test_yolov8m.py        # Video testing script
+├── data_exploration.ipynb    # Dataset exploration and analysis
+├── README.md                 # Project documentation
+└── requirements.txt          # Dependencies
+```
+
+## 🔧 Installation and Usage
 
 ### Prerequisites
-- Python 3.8+
-- PyTorch 1.8+
-- CUDA-capable GPU (recommended)
-
-### Installation
 ```bash
-git clone https://github.com/Chahla18/kitti-object-detection.git
-cd kitti-object-detection
 pip install -r requirements.txt
 ```
-
-### Dataset Download and Model Training
-Before you run the model, make sure you change some directories: **kitti-dir**, and **YOLO_dir**
+### Training Models
 ```bash
-python yolov8_advanced.py
+python models/yolov8_advanced.py --train
+python models/faster_rcnn.py --train  # Note: Requires significant GPU memory
 ```
-
-## Project Structure
+### Testing on Video
+```bash
+python video_testing/video_test_yolov8m.py --input path/to/video --output results.mp4
 ```
-├── data/                   # Data handling utilities
-├── data_exploration.ipynb     # Creating visuals to explore the data
-├── yolov8.py      # Initial test model
-├── yolov8_advanced.py      # Training and Evaluation script
-└── requirements.txt        # Dependencies
-```
+## 🔮 Future Work
 
-## Visualizations
+- Extended training for Faster R-CNN (40+ epochs)
+- Exploration of hybrid architectures combining single-stage and two-stage benefits
+- Evaluation of model robustness across various environmental conditions
 
-The repository includes visualizations for:
-- Bounding box size distributions per class
-- Object orientation distributions
-- Occlusion level statistics
-- Class distribution analysis
+## 👥 Authors
+
+- Chahla Tarmoun
+- Issame Abdeljalil
 
 ## Acknowledgments
 
