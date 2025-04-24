@@ -41,7 +41,7 @@ experiment_config = {
     "backbone": "resnet50_fpn",
     "techniques": ["augmentation"],
     # Training parameters
-    "epochs": 40,
+    "epochs": 15,
     "batch_size": 16,
     "img_size": 800,  # R-CNN can handle larger images
     "lr0": 0.005,
