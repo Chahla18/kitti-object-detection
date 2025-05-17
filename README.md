@@ -40,8 +40,8 @@ YOLOv8 clearly demonstrated superior performance:
 
 | Metric | YOLOv8 | Faster R-CNN |
 |--------|--------|-------------|
-| mAP50 | 0.919 | 0.057* |
-| mAP50-95 | 0.659 | 0.017* |
+| mAP50 | 0.919 | 0.82* |
+| mAP50-95 | 0.659 | 0.51* |
 | Precision | 0.909 | - |
 | Recall | 0.864 | - |
 
@@ -95,11 +95,6 @@ python video_testing/video_test_yolov8m.py --input path/to/video --output result
 - Extended training for Faster R-CNN (40+ epochs)
 - Exploration of hybrid architectures combining single-stage and two-stage benefits
 - Evaluation of model robustness across various environmental conditions
-
-## 👥 Authors
-
-- Chahla Tarmoun
-- Issame Abdeljalil
 
 ## Acknowledgments
 
